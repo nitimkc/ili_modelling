@@ -60,10 +60,9 @@ params.add('gamma_a', value=np.random.uniform(1/10, 1/3), min=1/10, max=1/3) # R
 params.add('mu', value=np.random.uniform(0, 0.1), min=0, max=0.1)   # Mortality rate (symptomatic)
 params.add('alpha', value=np.random.uniform(0.4, 0.9), min=0.4, max=0.9)   # Proportion of symptomatic infections
 
+# data files
 countries = {'FR':'France', 'ES':'Spain', 'IT':'Italy', 'DE':'Germany'}
 fileids = [i for i in DATA.glob('*.csv') if CONFIG['FILE_ALIAS'] in i.name]
-# print(fileids)
-
 for filepath in fileids:
     country = filepath.name.split("_")[-2].upper()
     print(country)
@@ -78,10 +77,10 @@ for filepath in fileids:
     df_fit = df_fit[df_fit['t']<=24*7]  
 
     targets = ['official', 'twitter']
+    info = ['t','wk_label']
     T = df_fit.shape[0]
-
-    # data to plot
-    plot_df = df_fit[['t','wk_label']+targets]
+    plot_df = df_fit[info+targets] # data to plot
+    
     for target in targets:
         print(target)
 
@@ -89,21 +88,20 @@ for filepath in fileids:
         sol = fit_seir(df_fit, target, params)
         S, E, Is, Ia, R, D = sol[:,0],sol[:,1],sol[:,2],sol[:,3],sol[:,4],sol[:,5] #sol.y
 
-        # model predictions from the SEIR simulation
-        I_model = Is      # Extract Symptomatic Infected (Is) from the model
+        # predicted Symptomatic Infected (Is) from the SEIR simulation
+        I_model = Is
         plot_df[f"{target}_pred"] =  I_model[:T]
     # print(plot_df.shape)
 
     # normalize
-    norm_indicator = None
     if CONFIG['NORMALIZE']:
-        cols = [i for i in plot_df.columns if i!='t']
+        cols = [i for i in plot_df.columns if i not in info]
         normalized = plot_df[cols]
         normalized = (normalized - normalized.mean())/normalized.std()
-        plot_df = pd.concat([plot_df[['t']], normalized], axis=1)
-        norm_indicator = 'normalized'
+        plot_df = pd.concat([plot_df[info], normalized], axis=1)
     
     # Plot Real Data vs. Model Predictions
+    norm_indicator = 'normalized' if CONFIG['NORMALIZE'] else None
     filename = f"SEIR_{country}_{norm_indicator}predplot.png"
     plot_prediction(plot_df, 
                     SAVEPATH.joinpath(filename), 

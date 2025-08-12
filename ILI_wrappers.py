@@ -35,17 +35,22 @@ def plot_prediction(plot_df, filename, country):
     Returns:
     save plot of model prediction against real data 
     """
-
+    print(plot_df.head())
     fig, ax = plt.subplots(figsize=(10, 6))
     plt.plot(plot_df['t'], plot_df['official'],
-        'r-', label="Real Data (Influenza Cases)", markersize=4)
+        'r-', label="Real Data (Influenza Cases)", 
+        markersize=4, alpha=0.6)
     plt.plot(plot_df['t'], plot_df['official_pred'],
-        'r--', label="Model Prediction (SEIR)", linewidth=2)
+        'r--', label="Model Prediction (SEIR)", 
+        linewidth=2, alpha=0.6)
     
     plt.plot(plot_df['t'], plot_df['twitter'], 
-        'b-', label="Real Data (Influenza Cases) - twitter", markersize=4)
+        'b-', label="Real Data (Influenza Cases) - twitter", 
+        markersize=4, alpha=0.6)
     plt.plot(plot_df['t'], plot_df['twitter_pred'],
-        'b--', label="Model Prediction (SEIR)", linewidth=2)
+        'b--', label="Model Prediction (SEIR)", 
+        linewidth=2, alpha=0.6)
+
     ax.set_xticks(plot_df['t'])
     ax.set_xticklabels(plot_df['wk_label'])
     plt.xticks(rotation=75)
