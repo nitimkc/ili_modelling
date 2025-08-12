@@ -23,6 +23,8 @@ import matplotlib.pyplot as plt
 from lmfit import Parameters
 from ILI_SEIR import fit_seir
 
+from ILI_wrappers import plot_prediction
+
 log = logging.getLogger("readability.readability")
 log.setLevel('WARNING')
 
@@ -42,7 +44,7 @@ SAVEPATH.mkdir(parents=True, exist_ok=True)
 with open(CONFIG_FILE, "r") as f:
     CONFIG = yaml.safe_load(f)
 CONFIG = CONFIG["default"]
-print(CONFIG)
+# print(CONFIG)
 
 # Define model parameters using lmfit
 # TO DO - move to config
@@ -60,7 +62,7 @@ params.add('alpha', value=np.random.uniform(0.4, 0.9), min=0.4, max=0.9)   # Pro
 
 countries = {'FR':'France', 'ES':'Spain', 'IT':'Italy', 'DE':'Germany'}
 fileids = [i for i in DATA.glob('*.csv') if CONFIG['FILE_ALIAS'] in i.name]
-print(fileids)
+# print(fileids)
 
 for filepath in fileids:
     country = filepath.name.split("_")[-2].upper()
@@ -68,10 +70,8 @@ for filepath in fileids:
 
     # prepare data to fit
     df_influenza = pd.read_csv(DATA.joinpath(filepath))
-    season = 201819
-    start_week = 201845
-    df_fit = df_influenza[(df_influenza['season'] == season)] 
-    df_fit = df_fit[(df_fit['week'] >= start_week)]          # take flu-season weeks only
+    df_fit = df_influenza[(df_influenza['season'] == CONFIG['SEASON'])] 
+    df_fit = df_fit[(df_fit['week'] >= CONFIG['START_WEEK'])]          # take flu-season weeks only
 
     df_fit.sort_values(by='week', inplace=True)
     df_fit['t'] = np.arange(0, len(df_fit)) * 7
@@ -81,7 +81,7 @@ for filepath in fileids:
     T = df_fit.shape[0]
 
     # data to plot
-    plot_df = df_fit[['t']]
+    plot_df = df_fit[['t','wk_label']+targets]
     for target in targets:
         print(target)
 
@@ -92,25 +92,22 @@ for filepath in fileids:
         # model predictions from the SEIR simulation
         I_model = Is      # Extract Symptomatic Infected (Is) from the model
         plot_df[f"{target}_pred"] =  I_model[:T]
-        # print(plot_df['official'].shape)
+    # print(plot_df.shape)
 
+    # normalize
+    norm_indicator = None
+    if CONFIG['NORMALIZE']:
+        cols = [i for i in plot_df.columns if i!='t']
+        normalized = plot_df[cols]
+        normalized = (normalized - normalized.mean())/normalized.std()
+        plot_df = pd.concat([plot_df[['t']], normalized], axis=1)
+        norm_indicator = 'normalized'
+    
     # Plot Real Data vs. Model Predictions
-    fig, ax = plt.subplots(figsize=(10, 6))
-    plt.plot(plot_df['t'], plot_df['official'],
-        'r-', label="Real Data (Influenza Cases)", markersize=4)
-    plt.plot(plot_df['t'], plot_df['official_pred'],
-        'r--', label="Model Prediction (SEIR)", linewidth=2)
-    plt.plot(plot_df['t'], plot_df['twitter'], 
-        'b-', label="Real Data (Influenza Cases) - twitter", markersize=4)
-    plt.plot(plot_df['t'], plot_df['twitter'],
-        'b--', label="Model Prediction (SEIR)", linewidth=2)
-    ax.set_xticks(df_fit['t'])
-    ax.set_xticklabels(df_fit['wk_label'])
-    plt.xticks(rotation=75)
-
-    # plt.xlabel("Days")
-    plt.ylabel(f"Number of Cases - {target} France (Year not Season)")
-    plt.title(f"Real Influenza Cases vs. SEIR Model Prediction - {countries[country]}")
-    plt.legend()
-    plt.grid()
-    plt.savefig(SAVEPATH.joinpath(f"SEIR_{country}_predplot.png"))
+    filename = f"SEIR_{country}_{norm_indicator}predplot.png"
+    plot_prediction(plot_df, 
+                    SAVEPATH.joinpath(filename), 
+                    countries[country]
+                    )
+    print(f"{filename} saved")
+    print("=================")
