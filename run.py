@@ -71,6 +71,7 @@ for filepath in fileids:
     for target in targets:
         print(f"SEIR for {country} {target}")
         pred = fit_seir(df_fit, target, popn[country], country, SAVEPATH)
+        print(pred)
         if pred is not None:
             plot_df[f"{target}_pred"] =  pred # fit model
     # print(plot_df.shape)

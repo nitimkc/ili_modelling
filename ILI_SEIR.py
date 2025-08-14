@@ -7,10 +7,13 @@ Created on Fri Mar  7 10:53:22 2025
 """
 
 import logging
-import time
+import sys
 from tqdm import tqdm
+
+import time
 import json
 
+import random
 from itertools import product
 import numpy as np
 import pandas as pd
@@ -22,8 +25,8 @@ from lmfit import minimize, Parameters, Parameter, report_fit, Model, Minimizer
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]  # Output to stdout
-)
+    handlers=[logging.StreamHandler(sys.stdout)]  # Output to stdout
+    )
 logger = logging.getLogger()
 
 def extract_param_values(params):
@@ -59,6 +62,8 @@ def fit_seir(df, target, N, label, savepath):
     sigma = np.linspace(0.2, 0.5, 4)
     gamma_s = np.linspace(0.1, 0.5, 5)
     param_grid = list(product(beta_s_base, sigma, gamma_s))
+    param_grid = random.sample(param_grid, 2)
+    print(f"Number of fits: {len(param_grid)}")
     
     results = []
     start_time = time.time()
@@ -81,19 +86,25 @@ def fit_seir(df, target, N, label, savepath):
             params.add('mu', value=np.random.uniform(0, 0.1), min=0, max=0.1)
             params.add('alpha', value=np.random.uniform(0.4, 0.9), min=0.4, max=0.9)
             
-            # optimize and save
+            # optimize
             fit_start = time.time()
             result = minimize(residual, params, nan_policy='omit',
                         args=(t_data, y0, I_real), method='least_squares',
                         max_nfev=10000, ftol=1e-8, gtol=1e-8, xtol=1e-8, loss='huber',
                         # max_nfev=100000, ftol=1e-10, gtol=1e-10, xtol=1e-10, loss='arctan', 
                         diff_step=1e-4, tr_solver='lsmr', 
-                        verbose=1)
+                        verbose=0)
             results.append(result)
             fit_duration = time.time() - fit_start
-            # tqdm.write(f"Step {i + 1}/{len(param_grid)} completed in {fit_duration:.2f}s")
-            logger.info(f"Fit {i + 1}: beta={beta:.3f}, sigma={sigma:.3f}, gamma={gamma:.3f}, residual={result.chisqr:.4f}")
+            if (i + 1) % 10 == 0 or (i + 1) == len(param_grid):
+                tqdm.write(
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} - INFO - Fit {i + 1}: "
+                    f"beta={beta:.3f}, sigma={sigma:.3f}, gamma={gamma:.3f}, "
+                    f"residual={result.chisqr:.4f}, duration={fit_duration:.2f}s"
+                )
+            # logger.info(f"Fit {i + 1}: beta={beta:.3f}, sigma={sigma:.3f}, gamma={gamma:.3f}, residual={result.chisqr:.4f}")
 
+            # save result
             save_result = {
                 'country': label,
                 'target': target,
@@ -103,8 +114,8 @@ def fit_seir(df, target, N, label, savepath):
                 'residual': result.chisqr,
                 'opt_params': extract_param_values(result.params) # nested dict
                 }
-            json_path = savepath.joinpath("seir_fit_results.json")
-            with open(json_path, "a") as f:
+            json_fitpath = savepath.joinpath("seir_fit_results.json")
+            with open(json_fitpath, "a") as f:
                 f.write(json.dumps(save_result) + ",\n")
 
     except Exception as e:
@@ -113,22 +124,28 @@ def fit_seir(df, target, N, label, savepath):
     logger.info(f"All fits completed in {total_duration:.2f} seconds")
     
     if results:
+        # obtain and save results with best params
         best_result = min(results, key=lambda r: r.chisqr)
-        best_result = best_result.params
-
+        best_params = best_result.params  # <--- this is the Parameters object
         logger.info(
-            f"Best fit: beta={best_result['beta_s_base'].value:.3f}, "
-            f"sigma={best_result['sigma'].value:.3f}, "
-            f"gamma={best_result['gamma_s'].value:.3f}, "
+            f"Best fit: beta={best_params['beta_s_base'].value:.3f}, "
+            f"sigma={best_params['sigma'].value:.3f}, "
+            f"gamma={best_params['gamma_s'].value:.3f}, "
             f"residual={best_result.chisqr:.4f}"
-            )
+        )
 
         # Simulate SEIR model
-        sol = odeint(seir_model, y0, t_data, args=(best_params,))
-        sol_df = pd.DataFrame(sol, columns=['S', 'E', 'Is', 'Ia', 'R', 'D'])
-        sol_df.to_csv(savepath.joinpath(f"seir_best_soln_{label}_{target}.csv"), index=False)
+        soln = odeint(seir_model, y0, t_data, args=(best_params,))
+        soln_df = pd.DataFrame(soln, columns=['S', 'E', 'Is', 'Ia', 'R', 'D'])
+        soln_df['country'] = label
+        soln_df['target'] = target
+        
+        json_bestfitpath = savepath.joinpath("seir_best_solution.json")
+        with open(json_bestfitpath, "a") as f:
+            soln_df.to_json(f, orient='records', lines=True)
+            f.write("\n")
 
-        I_model = sol_df['Is'] # predicted Symptomatic Infected (Is) from the SEIR simulation
+        I_model = soln_df['Is'] # predicted Symptomatic Infected (Is) from the SEIR simulation
         I_pred = I_model[:T]
         return I_pred
     else:
