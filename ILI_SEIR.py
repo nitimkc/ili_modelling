@@ -3,9 +3,15 @@
 """
 Created on Fri Mar  7 10:53:22 2025
 
-@author: llopez
+@author: llopez, nitimkc
 """
 
+import logging
+import time
+from tqdm import tqdm
+import json
+
+from itertools import product
 import numpy as np
 import pandas as pd
 
@@ -13,13 +19,27 @@ from scipy.integrate import solve_ivp
 from scipy.integrate import odeint
 from lmfit import minimize, Parameters, Parameter, report_fit, Model, Minimizer
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]  # Output to stdout
+)
+logger = logging.getLogger()
+
+def extract_param_values(params):
+    """Extract just the .value of each lmfit Parameter into a flat dict."""
+    return {k: v.value for k, v in params.items()}
+
 # fit seir_model to data
-def fit_seir(df, target, params):
+def fit_seir(df, target, N, label, savepath):
+    
+    # data values
     I_real = df[target].values # real incidences
     t_data = df['t'].values    # time stamp
+    T = df.shape[0]
 
-    # Initial conditions (Population = 1,000,000)
-    N   = 46e6
+    # Initial conditions 
+    # N   = 46e6       # (Population = 1,000,000)
     I0  = I_real[0]    # Initial infections
     E0  = I0*1         # Initial exposed individuals
     S0  = N - I0 - E0  # Remaining are susceptible
@@ -34,19 +54,86 @@ def fit_seir(df, target, params):
     t_eval = np.linspace(*t_span, max(t_data))   
 
     # Optimize parameters
-    # You can set up this part of the code to make a loop of N experiments with 
-    # initial random conditions and save the full set of parameters
-    result = minimize(residual, params, nan_policy='omit',
-                      args=(t_data, y0, I_real), method='least_squares',
-                      max_nfev=10000, ftol=1e-8, gtol=1e-8, xtol=1e-8, loss='huber',
-                      # max_nfev=100000, ftol=1e-10, gtol=1e-10, xtol=1e-10, loss='arctan', 
-                      diff_step=1e-4, tr_solver='lsmr', 
-                      verbose=2)
-    params = result.params
+    # TO DO - move to config
+    beta_s_base = np.linspace(0.2, 1.5, 5)
+    sigma = np.linspace(0.2, 0.5, 4)
+    gamma_s = np.linspace(0.1, 0.5, 5)
+    param_grid = list(product(beta_s_base, sigma, gamma_s))
+    
+    results = []
+    start_time = time.time()
+    try:
+        for i, (beta, sigma, gamma) in enumerate(tqdm(param_grid, desc="Fitting models")):
+            # Define model parameters using lmfit
+            # TO DO - move to config
+            params = Parameters()
+            
+            # Fixed grid-search parameters
+            params.add('beta_s_base', value=beta, vary=False)
+            params.add('sigma', value=sigma, vary=False)
+            params.add('gamma_s', value=gamma, vary=False)
+            
+            # Other parameters (to be optimized)
+            params.add('beta_s_amp', value=np.random.uniform(0, 0.5), min=0, max=2)
+            params.add('beta_a_base', value=np.random.uniform(0.05, 1.5), min=0.05, max=1.5)
+            params.add('beta_a_amp', value=np.random.uniform(0, 0.5), min=0, max=2)
+            params.add('gamma_a', value=np.random.uniform(0.1, 0.5), min=0.1, max=0.5)
+            params.add('mu', value=np.random.uniform(0, 0.1), min=0, max=0.1)
+            params.add('alpha', value=np.random.uniform(0.4, 0.9), min=0.4, max=0.9)
+            
+            # optimize and save
+            fit_start = time.time()
+            result = minimize(residual, params, nan_policy='omit',
+                        args=(t_data, y0, I_real), method='least_squares',
+                        max_nfev=10000, ftol=1e-8, gtol=1e-8, xtol=1e-8, loss='huber',
+                        # max_nfev=100000, ftol=1e-10, gtol=1e-10, xtol=1e-10, loss='arctan', 
+                        diff_step=1e-4, tr_solver='lsmr', 
+                        verbose=1)
+            results.append(result)
+            fit_duration = time.time() - fit_start
+            # tqdm.write(f"Step {i + 1}/{len(param_grid)} completed in {fit_duration:.2f}s")
+            logger.info(f"Fit {i + 1}: beta={beta:.3f}, sigma={sigma:.3f}, gamma={gamma:.3f}, residual={result.chisqr:.4f}")
 
-    # sol = solve_ivp(seir_model, t_span, y0, t_eval=t_eval, args=(params,))
-    sol = odeint(seir_model,y0,t_data, args=(params,))
-    return sol
+            save_result = {
+                'country': label,
+                'target': target,
+                'beta': beta,
+                'sigma': sigma,
+                'gamma': gamma,
+                'residual': result.chisqr,
+                'opt_params': extract_param_values(result.params) # nested dict
+                }
+            json_path = savepath.joinpath("seir_fit_results.json")
+            with open(json_path, "a") as f:
+                f.write(json.dumps(save_result) + ",\n")
+
+    except Exception as e:
+        logger.warning(f"Fit {i + 1} failed: {e}")
+    total_duration = time.time() - start_time
+    logger.info(f"All fits completed in {total_duration:.2f} seconds")
+    
+    if results:
+        best_result = min(results, key=lambda r: r.chisqr)
+        best_result = best_result.params
+
+        logger.info(
+            f"Best fit: beta={best_result['beta_s_base'].value:.3f}, "
+            f"sigma={best_result['sigma'].value:.3f}, "
+            f"gamma={best_result['gamma_s'].value:.3f}, "
+            f"residual={best_result.chisqr:.4f}"
+            )
+
+        # Simulate SEIR model
+        sol = odeint(seir_model, y0, t_data, args=(best_params,))
+        sol_df = pd.DataFrame(sol, columns=['S', 'E', 'Is', 'Ia', 'R', 'D'])
+        sol_df.to_csv(savepath.joinpath(f"seir_best_soln_{label}_{target}.csv"), index=False)
+
+        I_model = sol_df['Is'] # predicted Symptomatic Infected (Is) from the SEIR simulation
+        I_pred = I_model[:T]
+        return I_pred
+    else:
+        logger.error("No successful fits found.")
+        return None
 
 # Define the SEIR model with symptomatic and asymptomatic cases
 def seir_model(y, t, params):

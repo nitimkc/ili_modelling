@@ -46,26 +46,13 @@ with open(CONFIG_FILE, "r") as f:
 CONFIG = CONFIG["default"]
 # print(CONFIG)
 
-# Define model parameters using lmfit
-# TO DO - move to config
-params = Parameters()
-params.add('beta_s_base', value=np.random.uniform(0.1, 0.5), min=0.1, max=5)  # Base transmission rate (symptomatic)
-params.add('beta_s_amp', value=np.random.uniform(0, 0.5), min=0, max=2)  # Seasonal variation amplitude (symptomatic)
-params.add('beta_a_base', value=np.random.uniform(0.05, 1.5), min=0.05, max=1.5)  # Base transmission rate (asymptomatic)
-params.add('beta_a_amp', value=np.random.uniform(0, 0.5), min=0, max=2)  # Seasonal variation amplitude (asymptomatic)
-
-params.add('sigma', value=np.random.uniform(1/5, 1/2), min=1/5, max=1/2)   # Incubation rate (E → I)
-params.add('gamma_s', value=np.random.uniform(1/14, 1/3), min=1/14, max=1/3) # Recovery rate (symptomatic)
-params.add('gamma_a', value=np.random.uniform(1/10, 1/3), min=1/10, max=1/3) # Recovery rate (asymptomatic)
-params.add('mu', value=np.random.uniform(0, 0.1), min=0, max=0.1)   # Mortality rate (symptomatic)
-params.add('alpha', value=np.random.uniform(0.4, 0.9), min=0.4, max=0.9)   # Proportion of symptomatic infections
-
 # data files
 countries = {'FR':'France', 'ES':'Spain', 'IT':'Italy', 'DE':'Germany'}
+# https://ec.europa.eu/eurostat/documents/2995521/9063738/3-10072018-BP-EN.pdf/ccdfc838-d909-4fd8-b3f9-db0d65ea457f#:~:text=EU%20population%20up%20to%20nearly,Population%20Day%20(11%20July).
+popn = {'FR':67.2e6, 'ES':46.7e6, 'IT':60.5e6, 'DE':82.9e6} 
 fileids = [i for i in DATA.glob('*.csv') if CONFIG['FILE_ALIAS'] in i.name]
 for filepath in fileids:
     country = filepath.name.split("_")[-2].upper()
-    print(country)
 
     # prepare data to fit
     df_influenza = pd.read_csv(DATA.joinpath(filepath))
@@ -82,27 +69,22 @@ for filepath in fileids:
     plot_df = df_fit[info+targets] # data to plot
     
     for target in targets:
-        print(target)
-
-        # fit model
-        sol = fit_seir(df_fit, target, params)
-        S, E, Is, Ia, R, D = sol[:,0],sol[:,1],sol[:,2],sol[:,3],sol[:,4],sol[:,5] #sol.y
-
-        # predicted Symptomatic Infected (Is) from the SEIR simulation
-        I_model = Is
-        plot_df[f"{target}_pred"] =  I_model[:T]
+        print(f"SEIR for {country} {target}")
+        pred = fit_seir(df_fit, target, popn[country], country, SAVEPATH)
+        if pred is not None:
+            plot_df[f"{target}_pred"] =  pred # fit model
     # print(plot_df.shape)
 
     # normalize
     if CONFIG['NORMALIZE']:
-        cols = [i for i in plot_df.columns if i not in info]
-        normalized = plot_df[cols]
+        norm_cols = [i for i in plot_df.columns if i not in info]
+        normalized = plot_df[norm_cols]
         normalized = (normalized - normalized.mean())/normalized.std()
         plot_df = pd.concat([plot_df[info], normalized], axis=1)
     
     # Plot Real Data vs. Model Predictions
     norm_indicator = 'normalized' if CONFIG['NORMALIZE'] else None
-    filename = f"SEIR_{country}_{norm_indicator}predplot.png"
+    filename = f"SEIR_{country}_{norm_indicator}predplot_popnadj.png"
     plot_prediction(plot_df, 
                     SAVEPATH.joinpath(filename), 
                     countries[country]

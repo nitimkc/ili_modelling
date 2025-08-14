@@ -35,7 +35,7 @@ def plot_prediction(plot_df, filename, country):
     Returns:
     save plot of model prediction against real data 
     """
-    print(plot_df.head())
+    # print(plot_df.head())
     fig, ax = plt.subplots(figsize=(10, 6))
     plt.plot(plot_df['t'], plot_df['official'],
         'r-', label="Real Data (Influenza Cases)", 
