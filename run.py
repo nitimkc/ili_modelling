@@ -21,8 +21,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from lmfit import Parameters
-from ILI_SEIR import fit_seir
+from scipy.ndimage import gaussian_filter1d
 
+from ILI_SEIR import fit_seir
 from ILI_wrappers import plot_prediction
 
 log = logging.getLogger("readability.readability")
@@ -46,11 +47,18 @@ with open(CONFIG_FILE, "r") as f:
 CONFIG = CONFIG["default"]
 # print(CONFIG)
 
-# data files
-countries = {'FR':'France', 'ES':'Spain', 'IT':'Italy', 'DE':'Germany'}
+# population
 # https://ec.europa.eu/eurostat/documents/2995521/9063738/3-10072018-BP-EN.pdf/ccdfc838-d909-4fd8-b3f9-db0d65ea457f#:~:text=EU%20population%20up%20to%20nearly,Population%20Day%20(11%20July).
 popn = {'FR':67.2e6, 'ES':46.7e6, 'IT':60.5e6, 'DE':82.9e6} 
+
+# data files
+countries = {'FR':'France', 'ES':'Spain', 'IT':'Italy', 'DE':'Germany'}
 fileids = [i for i in DATA.glob('*.csv') if CONFIG['FILE_ALIAS'] in i.name]
+geo = "it"
+print(f"working with {geo.upper()} only.")
+fileids = [i for i in fileids if geo in i.name]
+print(fileids)
+
 for filepath in fileids:
     country = filepath.name.split("_")[-2].upper()
 
@@ -65,16 +73,19 @@ for filepath in fileids:
 
     targets = ['official', 'twitter']
     info = ['t','wk_label']
-    T = df_fit.shape[0]
     plot_df = df_fit[info+targets] # data to plot
-    
+    plot_df = plot_df.reset_index(drop=True)
+
     for target in targets:
+        if target == 'twitter':
+            # df_fit[target] = savgol_filter(df_fit[target], window_length=7, polyorder=2) # savitzky-golay filter
+            df_fit[target] = gaussian_filter1d(df_fit[target], sigma=2) # gaussian filter
         print(f"SEIR for {country} {target}")
-        pred = fit_seir(df_fit, target, popn[country], country, SAVEPATH)
-        print(pred)
+        pred = fit_seir(df_fit, target, country, popn[country], CONFIG['PARAMS'], 
+                        SAVEPATH, time_calibration=False)
         if pred is not None:
             plot_df[f"{target}_pred"] =  pred # fit model
-    # print(plot_df.shape)
+    plot_df.to_csv(SAVEPATH.joinpath(f"plot_{country}.csv"), index=False)
 
     # normalize
     if CONFIG['NORMALIZE']:

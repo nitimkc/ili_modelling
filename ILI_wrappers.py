@@ -10,8 +10,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from lmfit import minimize
-from ILI_SEIR import residual
+from lmfit import minimize, Parameters
 
 def getseason(week, year, N=40):
     # influenza season
@@ -23,6 +22,62 @@ def getseason(week, year, N=40):
     return season
 # getseason(5,2009)
 
+def set_params(beta, sigma, gamma):
+    """
+    put parameters as Parameters object
+
+    Arguments:
+    residual -- loss function
+
+    Returns:
+    solution of minimization 
+    """
+    params = Parameters()
+    
+    # Fixed grid-search parameters
+    params.add('beta_s_base', value=beta, vary=False)
+    params.add('sigma', value=sigma, vary=False)
+    params.add('gamma_s', value=gamma, vary=False)
+    
+    # Other parameters (to be optimized)
+    params.add('beta_s_amp', value=np.random.uniform(0, 0.5), min=0, max=2)
+    params.add('beta_a_base', value=np.random.uniform(0.05, 1.5), min=0.05, max=1.5)
+    params.add('beta_a_amp', value=np.random.uniform(0, 0.5), min=0, max=2)
+    params.add('gamma_a', value=np.random.uniform(0.1, 0.5), min=0.1, max=0.5)
+    params.add('mu', value=np.random.uniform(0, 0.1), min=0, max=0.1)
+    params.add('alpha', value=np.random.uniform(0.4, 0.9), min=0.4, max=0.9)
+
+    return params
+
+def inflection_point(inc, t):
+    """
+    
+    Arguments:
+    
+    Returns:
+    
+    """
+    dI = np.gradient(inc, t)
+    inflection_idx = np.argmax(dI)      # or detect curvature change
+    inflection_point = t[inflection_idx]
+    return inflection_point
+
+def timeshift(inflection_real, inflection_pred, t):
+    """
+    
+    Arguments:
+    
+    Returns:
+    
+    """
+    delta = inflection_real - inflection_pred
+    t_shifted = t + delta
+    print("timeshift")
+    print(t)
+    print(t_shifted)
+    if t_shifted[0] < 0:
+        print("Warning: shifted time starts before t=0")
+    return t_shifted
 
 def plot_prediction(plot_df, filename, country):
     """
