@@ -47,26 +47,21 @@ def fit_seir(df, target, label, N, config, savepath, time_calibration=True, erla
     t_data = df['t'].values    # time stamp
     T = df.shape[0] 
     
-    phi_guess = 0.2
     Is0 = I_real[0]    # Initial symptomatic
     Ia0 = Is0 * 2.0
     E0  = Is0 * 2.0    # Initial total exposed but not infectious individuals
     R0  = 0
     D0  = 0            # Death
     
-    S0 = (N * phi_guess) - E0 - Ia0 - Is0 - R0 - D0
+    S0 = N - E0 - Ia0 - Is0 - R0 - D0
         
     if erlang:
-        # y0 = [S0, E0, 0, 0, Is0, Ia0, R0, 0]
-        y0 = [S0, E0/3, E0/3, E0/3, Is0, Ia0, R0, D0]
-        expected_sum = N * phi_guess
+        y0 = [S0, E0, 0, 0, Is0, Ia0, R0, D0]
     else:
         y0 = [S0, E0_total, Is0, Ia0, R0, D0]
     
     print(f"Initial conditions: {y0}")
-    target_sum = N * phi_guess if erlang else N
-    assert abs(sum(y0) - target_sum) < 1e-6, f"Sum is {sum(y0)}, expected {target_sum}"
-    # assert abs(sum(y0) - N) < 1e-6, "Initial compartments don’t sum to N"
+    assert abs(sum(y0) - N) < 1e-6, "Initial compartments don’t sum to N"
 
 
     # 2. Build params grid to search over
@@ -85,7 +80,7 @@ def fit_seir(df, target, label, N, config, savepath, time_calibration=True, erla
     start_time = time.time()
     
     # in parallel 
-    results = Parallel(n_jobs=64, backend="multiprocessing", batch_size=25, verbose=1)(
+    results = Parallel(n_jobs=32,  backend="multiprocessing", batch_size=25, verbose=0)(
         delayed(run_fit)( 
             i, beta, sigma, gamma, t_data, y0, I_real, label, target, N, savepath
         )
@@ -162,7 +157,6 @@ def run_fit(i, beta, sigma, gamma, t_data, y0, I_real, label, target, N, savepat
     
     try:
         params = set_params(beta, sigma, gamma, y0[4], y0[5], y0[1], N)
-        params.pretty_print()
 
         fit_start = time.time()
         result = optimize(residual, params, (t_data, I_real, N), label, target, savepath, precision="fast")
@@ -242,25 +236,20 @@ def simulate_SEIR(t_data, label, target, params, N, savepath=None, filename="", 
     Is0 = params['Is0'].value
     Ia0 = params['Ia0'].value
     E0  = params['E0'].value
-    phi = params['phi'].value
-
-    D0 = 0
-
-    S0 = (N * phi) - (E0 + Is0 + Ia0)
-    R0 = N - (S0 + E0 + Ia0 + Is0 + D0)
 
     if erlang:
         # S, E1, E2, E3, Is, Ia, R, D (8 compartments)
-        # y0 = [S0, E0, 0, 0, Is0, Ia0, R0, 0]
-        y0 = [S0, E0/3, E0/3, E0/3, Is0, Ia0, R0, D0]
-        cols = ['S', 'E1', 'E2', 'E3', 'Is', 'Ia', 'R', 'D']
+        S0 = N - (E0 + Is0 + Ia0) 
+        y0_opt = [S0, E0, 0, 0, Is0, Ia0, 0, 0]
         model_func = seir_erlang_model
+        cols = ['S', 'E1', 'E2', 'E3', 'Is', 'Ia', 'R', 'D']
     else:
-        y0 = [S0, E0, Is0, Ia0, R0, D0]
-        cols = ['S', 'E', 'Is', 'Ia', 'R', 'D']
+        S0 = N - (E0 + Is0 + Ia0) 
+        y0_opt = [S0, E0, Is0, Ia0, 0, 0]
         model_func = seir_model
-        
-    soln = odeint(model_func, y0, t_data, args=(params,))
+        cols = ['S', 'E', 'Is', 'Ia', 'R', 'D']
+
+    soln = odeint(model_func, y0_opt, t_data, args=(params,))
     soln_df = pd.DataFrame(soln, columns=cols)
     soln_df['country'] = label
     soln_df['target'] = target
@@ -384,52 +373,22 @@ def g(t, y0, params, erlang=True):
         # Uses the original 6-compartment model
         return odeint(seir_model, y0, t, args=(params,))
 
-def residual(param, t, I_real, N, erlang=True):
-    """
-    Objective function for fitting the SEIR model to real data.
-    """
-    
-    Is0 = param['Is0'].value
-    Ia0 = param['Ia0'].value
-    E0  = param['E0'].value
-    phi = param['phi'].value
-    D0 = 0
+def joint_residual(param, t, I_official, I_twitter, N):
+    # 1. Run the same biological model once
+    sol = g(t, y0_opt, param)
+    I_true = sol[:, 4]  # The "True" infectious curve in the population
 
-    S0 = (N * phi) - (E0 + Is0 + Ia0)
-    R0 = N - (S0 + E0 + Ia0 + Is0) 
+    # 2. Extract separate reporting rates for each data source
+    # Official might report 5% of cases, Twitter might report 0.01%
+    rho_off = param['rho_official'].value 
+    rho_twit = param['rho_twitter'].value
 
-    if erlang:
-        # [S, E1, E2, E3, Is, Ia, R, D]
-        # y0 = [S0, E0, 0, 0, Is0, Ia0, R0, 0]
-        y0 = [S0, E0/3, E0/3, E0/3, Is0, Ia0, R0, 0]
-        is_index = 4
-    else:
-        # [S, E, Is, Ia, R, D]
-        y0 = [S0, E0, Is0, Ia0, R0, 0]
-        is_index = 2
+    # 3. Calculate residuals for BOTH streams
+    # We compare the single model against both datasets simultaneously
+    res_official = (I_true * rho_off) - I_official
+    res_twitter = (I_true * rho_twit) - I_twitter
 
-    # solve
-    sol = g(t, y0, param, erlang=erlang)
-    I_model = sol[:, is_index]  # Extract correctly based on index
-    
-    # residuals
-    # C_real = I_real.cumsum()                               
-    # C_model = np.cumsum(I_model)
+    # 4. Concatenate them into one long array for the optimizer
+    # Weighting twitter at 0.5 helps if it's noisier than official data
+    return np.concatenate([res_official.ravel(), res_twitter.ravel() * 0.5])
 
-    # Inf = ((I_model - I_real) / np.max(I_real)).ravel()
-    # Cum = ((C_model - C_real) / np.max(C_real)).ravel()
-    
-    # Residuals on Normalized Scale for stability
-    I_model_norm = I_model / N
-    I_real_norm = I_real / N
-    
-    Inf = (I_model_norm - I_real_norm).ravel()
-    
-    C_real_norm = I_real_norm.cumsum()
-    C_model_norm = I_model_norm.cumsum()
-    Cum = (C_model_norm - C_real_norm).ravel()
-
-    # Weighting: prioritizing the daily incidence curve (5) over the cumulative (3)
-    resid = np.concatenate([Inf * 5, Cum * 3])
-    resid = np.nan_to_num(resid, nan=1e6, posinf=1e6, neginf=1e6)    
-    return resid + 1e-15
